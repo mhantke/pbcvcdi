@@ -1,26 +1,42 @@
-import spimage,numpy
+import spimage,numpy,os
 import h5py
-from matplotlib.pyplot import figure,imsave
+from matplotlib.pyplot import figure
+from python_tools.gentools import imsave
 
-def full_reconstruction(filename,index_number,S,N_rec=100,downsampling=2):
-    I,M = load_pattern(filename,downsampling)
-    O_N = reconstruct(I,M,S,N_rec,"./%s_rec.cxi" % index_number)
-    ferr = O_N["scores_final"]["fourier_error"]
+def full_reconstruction(filename,index_number,S):
+    os.system("mkdir -p %s" % index_number)
+    os.system("rm %s/*" % index_number)
+    N_rec = int(S["n_rec"])
+    downsampling = int(S["downsampling"])
+    I,M = load_pattern(filename,index_number,downsampling)
+    O_N = reconstruct(I,M,S,N_rec,index_number)
     rs = O_N["real_space_final"]
-    sup = O_N["support_final"]
-    sel = ferr[:] < S["fourier_error_max"]
-    p = prtf(rs[sel,:,:],sup[sel,:,:],"./prtf_%s.h5" % index_number)
-    plot_prtf(p,"./%s" % (index_number),downsampling)
+    ferr = O_N["scores_final"]["fourier_error"]
+    rerr = O_N["scores_final"]["real_error"]
+    imsave_reconstructions(rs,ferr,index_number)
+    plot_real_error(rerr,index_number)
+    ferr_thresh = float(S["fourier_error_max"])
+    plot_fourier_error(ferr,index_number,ferr_thresh)
 
-def load_pattern(filename,downsampling=2):
+    sup = O_N["support_final"]
+    sel = ferr[:] < ferr_thresh
+    if sel.sum() > 1:
+        p = prtf(rs[sel,:,:],sup[sel,:,:],index_number)
+        plot_prtf(p,index_number,downsampling)
+    else:
+        print "WARNING: Did not find more than one reconstruction below threshold."
+
+def load_pattern(filename,index_number,downsampling=2):
     img = spimage.sp_image_read(filename,0)
     I = abs(img.image)
     M = numpy.array(img.mask,dtype="bool")
-    spimage.sp_image_free(img)
     I,M = spimage.downsample(I,downsampling,mask=M)
+    imsave("./%s/intensities_native.png" % index_number,numpy.log10(abs(img.image)+1)*numpy.log10(img.mask*10),vmin=1.5)
+    imsave("./%s/intensities_downsampled.png" % index_number,numpy.log10(I+1)*numpy.log10(M*10),vmin=1.5)
+    spimage.sp_image_free(img)
     return I,M
 
-def reconstruct(I,M,S,N=None,filename=None):
+def reconstruct(I,M,S,N=None,index_number=None):
     R = spimage.Reconstructor()
     R.set_intensities(I,shifted=False)
     R.set_mask(M,shifted=False)
@@ -29,8 +45,8 @@ def reconstruct(I,M,S,N=None,filename=None):
     R.set_phasing_algorithm("raar",beta_init=0.9,beta_final=0.9,constraints=["enforce_positivity"],number_of_iterations=2000)
     R.append_phasing_algorithm("raar",beta_init=0.9,beta_final=0.9,constraints=["enforce_positivity"],number_of_iterations=1000)
     R.append_phasing_algorithm("er",constraints=["enforce_positivity"],number_of_iterations=1000)
-    R.set_support_algorithm("area",blur_init=6.,blur_final=6.,area_init=S["area_init_1st"],area_final=S["area_final_1st"],update_period=100,number_of_iterations=2000,center_image=False)
-    R.append_support_algorithm("area",blur_init=6.,blur_final=1.,area_init=S["area_init_2nd"],area_final=S["area_final_2nd"],update_period=100,number_of_iterations=1000,center_image=False)
+    R.set_support_algorithm("area",blur_init=6.,blur_final=6.,area_init=float(S["area_init_1st"]),area_final=float(S["area_final_1st"]),update_period=100,number_of_iterations=2000,center_image=False)
+    R.append_support_algorithm("area",blur_init=6.,blur_final=1.,area_init=float(S["area_init_2nd"]),area_final=float(S["area_final_2nd"]),update_period=100,number_of_iterations=1000,center_image=False)
     R.append_support_algorithm("static",number_of_iterations=1000,center_image=False)
     if N is None:
         R.set_number_of_outputs(100)
@@ -38,23 +54,61 @@ def reconstruct(I,M,S,N=None,filename=None):
     else:
         R.set_number_of_outputs(3)
         O = R.reconstruct_loop(N)
-        if filename is not None:
-            print filename
-            W = spimage.CXIWriter(filename,N)
+        if index_number is not None:
+            W = spimage.CXIWriter("./%s/rec.cxi" % index_number,N)
             W.write_stack(O)
             W.close()
+    R.clear()
     return O
 
-def prtf(real_space,support,filename=None):
+def plot_real_error(real_error_final,index_number,real_error_threshold=None):
+    # Check real space errors
+    real_error_final_s = numpy.copy(real_error_final[:])
+    #rmax = 0.1
+    #s = [s for s,r in zip(range(N_rec),real_error_final[:]) if r < rmax]
+    real_error_final_s.sort()
+    fig = figure()
+    ax = fig.add_subplot(111)
+    ax.plot(real_error_final_s)
+    if real_error_threshold is not None:
+        ax.axhline(real_error_threshold)
+    ax.set_ylabel("Real space error")
+    ax.set_xlabel("No. of reconstruction")
+    #rs_max = abs(real_space_final[s,:,:]).max()
+    fig.savefig("./%s/real_space_error.png" % index_number,dpi=300)
+
+def plot_fourier_error(fourier_error_final,index_number,fourier_error_threshold=None):
+    # Check fourier space errors
+    fourier_error_final_s = numpy.copy(fourier_error_final[:])
+    #rmax = 0.1
+    #s = [s for s,r in zip(range(N_rec),fourier_error_final[:]) if r < rmax]
+    fourier_error_final_s.sort()
+    fig = figure()
+    ax = fig.add_subplot(111)
+    ax.plot(fourier_error_final_s)
+    if fourier_error_threshold is not None:
+        ax.axhline(fourier_error_threshold)
+    ax.set_ylabel("Fourier space error")
+    ax.set_xlabel("No. of reconstruction")
+    #rs_max = abs(fourier_space_final[s,:,:]).max()
+    fig.savefig("./%s/fourier_space_error.png" % index_number,dpi=300)
+
+def imsave_reconstructions(real_space,fourier_error,index_number):
+    s = fourier_error.argsort()
+    vmax = abs(real_space).max()
+    for i,rs,fe in zip(range(len(fourier_error)),real_space[s,:,:],fourier_error[s]):
+        imsave("./%s/img_%04i_ferr_%.4f.png" % (index_number,i,fe),abs(rs),vmax=vmax,vmin=0.)
+
+def prtf(real_space,support,index_number=None):
     prtf = spimage.prtf(real_space,support,
                         translate=True,enantio=True,full_out=True)
-    if filename is not None:
-        with h5py.File(filename,"w") as f:
+    if index_number is not None:
+        with h5py.File("./%s/prtf.h5" % index_number,"w") as f:
             for k,v in prtf.items():
                 f[k] = v
     return prtf
 
-def plot_prtf(prtf,filename_root,downsampling):
+def plot_prtf(prtf,index_number,downsampling):
     P = spimage.downsample(prtf["prtf"],downsampling)
     Pr = spimage.radial_mean(P,cx=P.shape[1]/2,cy=P.shape[0]/2)
     from scipy.ndimage.filters import gaussian_filter
@@ -65,7 +119,7 @@ def plot_prtf(prtf,filename_root,downsampling):
     detector_distance = 0.73
     wavelength = 1.1E-9
     res = spimage.detector_pixel_to_resolution_element(i_pixel=x,pixel_size=pixel_size,detector_distance=detector_distance,wavelength=wavelength)
-    fig = figure(figsize=(5,3))
+    fig = figure(figsize=(6,4))
     q = 1/res/2.*1E-9
     if (Prs<1/numpy.e).sum() > 0:
         q_res = (q[Prs<1/numpy.e])[0]
@@ -81,11 +135,11 @@ def plot_prtf(prtf,filename_root,downsampling):
     ax.set_ylabel("PRTF")
     ax.set_ylim(0,1)
     #title("Fourier_error_max:%s" % (S["fourier_error_max"]))
-    fig.savefig(filename_root+"_prtf.png",dpi=300)
+    fig.savefig("./%s/prtf.png" % index_number,dpi=300)
     I = abs(prtf["super_image"])
-    imsave(filename_root+"_super.png",I)
+    imsave("./%s/super_native.png" % index_number,I)
     from python_tools import imgtools,gentools,colormaptools
     Ic = imgtools.crop(I,40,"center_of_mass")
-    imsave(filename_root+"_super_cropped.png",Ic)
+    imsave("./%s/super_cropped.png" % index_number,Ic)
     Icu = imgtools.upsample(Ic,20)
-    imsave(filename_root+"_super_cropped_upsampled.png",Icu,cmap=colormaptools.cmaps["jet_lightbg2"])
+    imsave("./%s/super_cropped_upsampled.png" % index_number,Icu,cmap=colormaptools.cmaps["jet_lightbg2"])
