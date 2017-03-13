@@ -68,6 +68,28 @@ class MulproReconstructor(spimage.Reconstructor):
     def reconstruct_mulpro_loop(self):
         mulpro.mulpro(Nprocesses=self.ncpus, worker=self.recons_worker, getwork=self.reader, logres=self.writer)
 
+class LoopReconstructor(spimage.Reconstructor):
+    def __init__(self,**kwargs):
+        spimage.Reconstructor.__init__(self, **kwargs)
+    def reconstruct_chunks_tofile(self, N=1, chunk=1, filename='./tmp.cxi'):
+        for n in range(N):
+            output = self.reconstruct_loop(chunk)
+            with h5py.File(filename, 'a') as f:
+                for k,v in output.iteritems():
+                    if isinstance(v,dict):
+                        if k not in f.keys():
+                            f.create_group(k)
+                        for kd,vd in v.iteritems():
+                            if kd not in f[k].keys():
+                                d = f[k].create_dataset(kd, (chunk*N,), dtype=vd.dtype)
+                                d.attrs['axes'] = ['experiment_identifier']
+                            f[k][kd][n*chunk:(n+1)*chunk] = vd
+                    else:
+                        if k not in f.keys():
+                            d = f.create_dataset(k, (chunk*N, v.shape[1], v.shape[2]), dtype=v.dtype)
+                            d.attrs['axes'] = ['experiment_identifier:y:x']
+                        f[k][n*chunk:(n+1)*chunk] = v
+    
 def full_reconstruction(filename,index_number,S):
     os.system("mkdir -p %s" % index_number)
     os.system("rm %s/*" % index_number)
