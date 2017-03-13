@@ -1,7 +1,72 @@
 import spimage,numpy,os
 import h5py
+import copy
+import mulpro
+import multiprocessing
+import h5writer
 from matplotlib.pyplot import figure
 from python_tools.gentools import imsave
+
+mulpro_logger = mulpro.logger
+mulpro_logger.setLevel("ERROR") 
+mulpro.log.WARNING_AFTER_JOB_DURATION_SEC = 400
+
+class MulproReconstructor(spimage.Reconstructor):
+    def __init__(self, nrecons=1, ncpus=None, filename=None):
+        spimage.Reconstructor.__init__(self)
+        self.nrecons  = nrecons
+        self.ncpus    = ncpus
+        self.nperworker = 1
+        self.filename = filename
+        self.prepare_mulpro()
+        
+    def prepare_mulpro(self):
+        self.counter = 0
+        self.njobs = self.nrecons / self.nperworker
+        if self.filename is None:
+            self.filename = './tmp.cxi'
+        if os.path.isfile(self.filename):
+            print "INFO: %s already exists and is now overwritten." % self.filename
+            os.system('rm %s' %self.filename)
+        if self.ncpus is None:
+            self.ncpus = multiprocessing.cpu_count()
+
+    def recons_worker(self, iandN):
+        i,N = iandN
+        o = self.reconstruct_loop(N)
+        res = {}
+        res['i'] = i
+        res['o'] = o
+        return res
+        
+    def reader(self):
+        if self.counter < self.njobs:
+            self.counter += 1
+            return [self.counter - 1, self.nperworker]
+        else:
+            return None
+        
+    def writer(self, res):
+        i = res['i']
+        output = res['o']
+        with h5py.File(self.filename, 'a') as f:
+            for k,v in output.iteritems():
+                if isinstance(v,dict):
+                    if k not in f.keys():
+                        f.create_group(k)
+                    for kd,vd in v.iteritems():
+                        if kd not in f[k].keys():
+                            d = f[k].create_dataset(kd, (self.nrecons,), dtype=vd.dtype)
+                            d.attrs['axes'] = ['experiment_identifier']
+                        f[k][kd][i*self.nperworker:(i+1)*self.nperworker] = vd
+                else:
+                    if k not in f.keys():
+                        d = f.create_dataset(k, (self.nrecons, v.shape[1], v.shape[2]), dtype=v.dtype)
+                        d.attrs['axes'] = ['experiment_identifier:y:x']
+                    f[k][i*self.nperworker:(i+1)*self.nperworker] = v
+
+    def reconstruct_mulpro_loop(self):
+        mulpro.mulpro(Nprocesses=self.ncpus, worker=self.recons_worker, getwork=self.reader, logres=self.writer)
 
 def full_reconstruction(filename,index_number,S):
     os.system("mkdir -p %s" % index_number)
