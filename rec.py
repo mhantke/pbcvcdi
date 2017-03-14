@@ -74,6 +74,9 @@ class LoopReconstructor(spimage.Reconstructor):
     def __init__(self,**kwargs):
         spimage.Reconstructor.__init__(self, **kwargs)
     def reconstruct_chunks_tofile(self, N=1, chunk=1, filename='./tmp.cxi'):
+        if os.path.isfile(filename):
+            print "INFO: %s already exists and is now overwritten." %filename
+            os.system('rm %s' %filename)
         for n in range(N):
             output = self.reconstruct_loop(chunk)
             with h5py.File(filename, 'a') as f:
