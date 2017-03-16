@@ -3,7 +3,6 @@ import h5py
 import copy
 import mulpro
 import multiprocessing
-import h5writer
 from matplotlib.pyplot import figure
 from python_tools.gentools import imsave
 
@@ -13,7 +12,7 @@ mulpro.log.WARNING_AFTER_JOB_DURATION_SEC = 400
 
 class MulproReconstructor(spimage.Reconstructor):
     def __init__(self, nrecons=1, ncpus=None, filename=None):
-        spimage.Reconstructor.__init__(self)
+        spimage.Reconstructor.__init__(self, use_gpu=False)
         self.nrecons  = nrecons
         self.ncpus    = ncpus
         self.nperworker = 1
@@ -23,6 +22,7 @@ class MulproReconstructor(spimage.Reconstructor):
     def prepare_mulpro(self):
         self.counter = 0
         self.njobs = self.nrecons / self.nperworker
+        print self.njobs
         if self.filename is None:
             self.filename = './tmp.cxi'
         if os.path.isfile(self.filename):
@@ -33,6 +33,7 @@ class MulproReconstructor(spimage.Reconstructor):
 
     def recons_worker(self, iandN):
         i,N = iandN
+        print "Doing reconstruction %d/%d" %(i,self.nrecons)
         o = self.reconstruct_loop(N)
         res = {}
         res['i'] = i
@@ -41,6 +42,7 @@ class MulproReconstructor(spimage.Reconstructor):
         
     def reader(self):
         if self.counter < self.njobs:
+            print self.counter
             self.counter += 1
             return [self.counter - 1, self.nperworker]
         else:
@@ -72,6 +74,9 @@ class LoopReconstructor(spimage.Reconstructor):
     def __init__(self,**kwargs):
         spimage.Reconstructor.__init__(self, **kwargs)
     def reconstruct_chunks_tofile(self, N=1, chunk=1, filename='./tmp.cxi'):
+        if os.path.isfile(filename):
+            print "INFO: %s already exists and is now overwritten." %filename
+            os.system('rm %s' %filename)
         for n in range(N):
             output = self.reconstruct_loop(chunk)
             with h5py.File(filename, 'a') as f:
