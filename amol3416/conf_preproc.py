@@ -55,12 +55,6 @@ add_config_file_argument('--do-cmc',
 add_config_file_argument('--do-metrology',
                          help="Move pixels to their physical locations",
                          type=int, default=1)
-add_config_file_argument('--check-sha-amol3416',
-                         help="Abort processing if provided SHA key does not match SHA key of loaded amol3416 repo.",
-                         type=str, default=None)
-add_config_file_argument('--check-sha-hummingbird',
-                         help="Abort processing if provided SHA key does not match SHA key of loaded hummingbird repo.",
-                         type=str, default=None)
 add_config_file_argument('--do-metrology',
                          help="Move pixels to their physical locations",
                          type=int, default=1)
@@ -78,6 +72,7 @@ do_skipdark = True
 # PSANA
 # ------------------------------
 state = {}
+state['Facility'] = 'LCLS'
 state['LCLS/DataSource'] = 'exp=amol3416:run=%d' %args.lcls_run_number
 state['LCLS/PsanaConf'] = this_dir + '/pnccd_front.cfg'
 
@@ -155,8 +150,8 @@ hitcounter = 0
 # Output filename
 W = None
 out_dir = args.out_dir
-tmpfile  = '%s/.%s_r%04d_ol%i.h5' % (out_dir, data_mode, conf.run_nr, args.output_level)
-donefile = '%s/%s_r%04d_ol%i.h5' % (out_dir, data_mode, conf.run_nr, args.output_level)
+tmpfile  = '%s/.amol3416_r%04d_ol%i.h5' % (out_dir, args.lcls_run_number, args.output_level)
+donefile = '%s/amol3416_r%04d_ol%i.h5' % (out_dir,  args.lcls_run_number, args.output_level)
 D_solo = {}
 
 # Set up file writer
@@ -173,6 +168,9 @@ def onEvent(evt):
     global gain
     global gain_mode
     global caught_mask_flag
+
+    print evt.native_keys()
+    return
 
     ft = front_type
     fk = front_key  
@@ -200,10 +198,10 @@ def onEvent(evt):
         evt['analysis']['averagePhotonEnergy']
     except (TypeError,KeyError):
         print "No photon energy. Skipping event."
-        return       
+        #return       
 
     # Set to nominal photon energy
-    photon_energy_ev_avg = evt['analysis']['averagePhotonEnergy']
+    #photon_energy_ev_avg = evt['analysis']['averagePhotonEnergy']
     photon_energy_ev_nom = add_record(evt["analysis"], "analysis", "nominalPhotonEnergy" , nominal_photon_energy_eV)
     
     # Gain of PNCCD
@@ -293,6 +291,7 @@ def onEvent(evt):
     analysis.hitfinding.countLitPixels(evt, front, aduThreshold=gain, 
                                        hitscoreThreshold=hitscore_threshold, mask=mask_front)
     hit = evt["analysis"]["litpixel: isHit"].data
+    print hit, evt["analysis"]["litpixel: hitscore"].data
     if hit: hitcounter += 1
 
     # Saving to file
@@ -357,8 +356,8 @@ def onEvent(evt):
         # FEL
         D["entry_1"]["FEL"]["photon_energy_eV_nominal"] = photon_energy_ev_nom.data
         D["entry_1"]["FEL"]["wavelength_nm_nominal"] = constants.c*constants.h/(photon_energy_ev_nom.data*constants.e)/1E-9
-        D["entry_1"]["FEL"]["photon_energy_eV_SLAC"] = photon_energy_ev_avg.data
-        D["entry_1"]["FEL"]["wavelength_nm_SLAC"] = constants.c*constants.h/(photon_energy_ev_avg.data*constants.e)/1E-9
+        #D["entry_1"]["FEL"]["photon_energy_eV_SLAC"] = photon_energy_ev_avg.data
+        #D["entry_1"]["FEL"]["wavelength_nm_SLAC"] = constants.c*constants.h/(photon_energy_ev_avg.data*constants.e)/1E-9
         D["entry_1"]["FEL"]["pulse_length"] = evt["parameters"][pulselength_key].data
 
         W.write_slice(D)
@@ -371,7 +370,8 @@ def end_of_run():
         W.write_solo(D_solo)
         if save_pnccd and not caught_mask_flag:
             print "WARNING: No mask was saved. You might want to reduce the number of processes or increase the number of frames to be processed."
-    W.close(barrier=True)
+    #W.close(barrier=True)
+    W.close()
 
     if ipc.mpi.is_main_event_reader():
         if save_anything:
