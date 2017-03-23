@@ -24,7 +24,7 @@ sys.path.append(this_dir)
 from quad_correction import fix_upper_right_quadrant
 
 # Set logging level of h5writer
-utils.cxiwriter.h5writer.logger.setLevel("INFO")
+utils.cxiwriter.h5writer.logger.setLevel("WARNING")
 
 # Additional commandline arguments
 from utils.cmdline_args import argparser, add_config_file_argument
@@ -55,12 +55,6 @@ add_config_file_argument('--do-cmc',
 add_config_file_argument('--do-metrology',
                          help="Move pixels to their physical locations",
                          type=int, default=1)
-add_config_file_argument('--check-sha-amol3416',
-                         help="Abort processing if provided SHA key does not match SHA key of loaded amol3416 repo.",
-                         type=str, default=None)
-add_config_file_argument('--check-sha-hummingbird',
-                         help="Abort processing if provided SHA key does not match SHA key of loaded hummingbird repo.",
-                         type=str, default=None)
 add_config_file_argument('--do-metrology',
                          help="Move pixels to their physical locations",
                          type=int, default=1)
@@ -78,6 +72,7 @@ do_skipdark = True
 # PSANA
 # ------------------------------
 state = {}
+state['Facility'] = 'LCLS'
 state['LCLS/DataSource'] = 'exp=amol3416:run=%d' %args.lcls_run_number
 state['LCLS/PsanaConf'] = this_dir + '/pnccd_front.cfg'
 
@@ -129,7 +124,7 @@ state['reduce_nr_event_readers'] = 1
 # Run-specific parameters (these default values are for run 98 and 100)
 hitscore_threshold = 3500
 nominal_photon_energy_eV = 800
-rescaling_factors_asics = [2,2,1,1]
+rescaling_factors_asics = numpy.array([2,2,1,1])
 dx_front = 73
 dy_front = -3
 dy_timing_gap = 0
@@ -155,9 +150,11 @@ hitcounter = 0
 # Output filename
 W = None
 out_dir = args.out_dir
-tmpfile  = '%s/.%s_r%04d_ol%i.h5' % (out_dir, data_mode, conf.run_nr, args.output_level)
-donefile = '%s/%s_r%04d_ol%i.h5' % (out_dir, data_mode, conf.run_nr, args.output_level)
+tmpfile  = '%s/.amol3416_r%04d_ol%i.h5' % (out_dir, args.lcls_run_number, args.output_level)
+donefile = '%s/amol3416_r%04d_ol%i.h5' % (out_dir,  args.lcls_run_number, args.output_level)
 D_solo = {}
+if os.path.isfile(tmpfile):
+    os.system("rm -f %s" %tmpfile)
 
 # Set up file writer
 def beginning_of_run():
@@ -193,17 +190,19 @@ def onEvent(evt):
         print "No pulse energy. Skipping event."
         return
 
+    # NOTE: Reading photon energies requires newer version of psana!
     # Average pulse energies, in case there is no pulse energy it returns None 
     analysis.beamline.averagePhotonEnergy(evt, evt["photonEnergies"])
     # Skip frames that do not have a photon energy
     try:
         evt['analysis']['averagePhotonEnergy']
+        photon_energy_ev_avg = evt['analysis']['averagePhotonEnergy']
     except (TypeError,KeyError):
-        print "No photon energy. Skipping event."
-        return       
+        #print "No photon energy. Continue."
+        photon_energy_ev_avg = None
+        #return
 
     # Set to nominal photon energy
-    photon_energy_ev_avg = evt['analysis']['averagePhotonEnergy']
     photon_energy_ev_nom = add_record(evt["analysis"], "analysis", "nominalPhotonEnergy" , nominal_photon_energy_eV)
     
     # Gain of PNCCD
@@ -357,8 +356,9 @@ def onEvent(evt):
         # FEL
         D["entry_1"]["FEL"]["photon_energy_eV_nominal"] = photon_energy_ev_nom.data
         D["entry_1"]["FEL"]["wavelength_nm_nominal"] = constants.c*constants.h/(photon_energy_ev_nom.data*constants.e)/1E-9
-        D["entry_1"]["FEL"]["photon_energy_eV_SLAC"] = photon_energy_ev_avg.data
-        D["entry_1"]["FEL"]["wavelength_nm_SLAC"] = constants.c*constants.h/(photon_energy_ev_avg.data*constants.e)/1E-9
+        if photon_energy_ev_avg is not None:
+            D["entry_1"]["FEL"]["photon_energy_eV_SLAC"] = photon_energy_ev_avg.data
+            D["entry_1"]["FEL"]["wavelength_nm_SLAC"] = constants.c*constants.h/(photon_energy_ev_avg.data*constants.e)/1E-9
         D["entry_1"]["FEL"]["pulse_length"] = evt["parameters"][pulselength_key].data
 
         W.write_slice(D)
@@ -371,7 +371,11 @@ def end_of_run():
         W.write_solo(D_solo)
         if save_pnccd and not caught_mask_flag:
             print "WARNING: No mask was saved. You might want to reduce the number of processes or increase the number of frames to be processed."
-    W.close(barrier=True)
+
+    try:
+        W.close(barrier=True)
+    except:
+        W.close()
 
     if ipc.mpi.is_main_event_reader():
         if save_anything:
